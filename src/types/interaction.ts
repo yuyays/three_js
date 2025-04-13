@@ -20,12 +20,12 @@ export interface ScaleEvent {
   timestamp: number;
 }
 
-export interface RotationEvent {
-  object: Object3D | null;
-  rotationAngle: number;
-  rotationAxis: Vector3;
-  timestamp: number;
-}
+export interface RotateEvent {
+    object: Object3D | null;
+    rotationDelta: number; // Angle change in radians for this frame
+    totalRotation: number; // Total angle change since start of gesture
+    timestamp: number;
+  }
 
 export interface Selectable {
   isSelectable: boolean;
