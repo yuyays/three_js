@@ -1,5 +1,5 @@
-import { Mesh, MeshStandardMaterial } from 'three';
-import { Selectable } from '../../types/interaction';
+import { Mesh, MeshStandardMaterial, Vector2 } from 'three';
+import { Selectable, Draggable, Scalable } from '../../types/interaction';
 
 /**
  * Make an object selectable with visual feedback
@@ -41,4 +41,52 @@ export const makeSelectable = (
       onSelect();
     }
   };
+};
+
+/**
+ * Make an object draggable
+ */
+export const makeDraggable = (
+  mesh: Mesh,
+  options: {
+    onDragStart?: () => void;
+    onDrag?: (delta: Vector2) => void;
+    onDragEnd?: () => void;
+  } = {}
+): void => {
+  const { onDragStart, onDrag, onDragEnd } = options;
+  
+  // Add draggable properties to the mesh
+  mesh.userData.isDraggable = true;
+  
+  // Add drag handlers
+  if (onDragStart) mesh.userData.onDragStart = onDragStart;
+  if (onDrag) mesh.userData.onDrag = onDrag;
+  if (onDragEnd) mesh.userData.onDragEnd = onDragEnd;
+};
+
+/**
+ * Make an object scalable
+ */
+export const makeScalable = (
+  mesh: Mesh,
+  options: {
+    minScale?: number;
+    maxScale?: number;
+    onScaleStart?: () => void;
+    onScale?: (factor: number) => void;
+    onScaleEnd?: () => void;
+  } = {}
+): void => {
+  const { minScale = 0.5, maxScale = 2.0, onScaleStart, onScale, onScaleEnd } = options;
+  
+  // Add scalable properties to the mesh
+  mesh.userData.isScalable = true;
+  mesh.userData.minScale = minScale;
+  mesh.userData.maxScale = maxScale;
+  
+  // Add scale handlers
+  if (onScaleStart) mesh.userData.onScaleStart = onScaleStart;
+  if (onScale) mesh.userData.onScale = onScale;
+  if (onScaleEnd) mesh.userData.onScaleEnd = onScaleEnd;
 };
