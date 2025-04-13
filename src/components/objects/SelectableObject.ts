@@ -1,5 +1,5 @@
-import { Mesh, MeshStandardMaterial, Vector2 } from 'three';
-import { Selectable, Draggable, Scalable } from '../../types/interaction';
+import { Mesh, MeshStandardMaterial, Vector2, Vector3 } from 'three';
+import { Selectable, Draggable, Scalable, Rotatable } from '../../types/interaction';
 
 /**
  * Make an object selectable with visual feedback
@@ -90,3 +90,26 @@ export const makeScalable = (
   if (onScale) mesh.userData.onScale = onScale;
   if (onScaleEnd) mesh.userData.onScaleEnd = onScaleEnd;
 };
+
+/**
+ * Make an object rotatable
+ */
+export const makeRotatable = (
+    mesh: Mesh,
+    options: {
+      onRotateStart?: () => void;
+      onRotate?: (deltaAngle: number) => void;
+      onRotateEnd?: () => void;
+    } = {}
+  ): void => {
+    const { onRotateStart, onRotate, onRotateEnd } = options;
+  
+    // Add rotatable properties to the mesh
+    mesh.userData.isRotatable = true;
+  
+    // Add rotate handlers
+    if (onRotateStart) mesh.userData.onRotateStart = onRotateStart;
+    if (onRotate) mesh.userData.onRotate = onRotate;
+    if (onRotateEnd) mesh.userData.onRotateEnd = onRotateEnd;
+  };
+

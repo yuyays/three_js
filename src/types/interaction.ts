@@ -1,4 +1,4 @@
-import { Object3D, Vector2, Vector3 } from 'three';
+import { Object3D, Vector2, Vector3, Euler } from 'three';
 
 export interface SelectionEvent {
   object: Object3D | null;
@@ -20,6 +20,13 @@ export interface ScaleEvent {
   timestamp: number;
 }
 
+export interface RotationEvent {
+  object: Object3D | null;
+  rotationAngle: number;
+  rotationAxis: Vector3;
+  timestamp: number;
+}
+
 export interface Selectable {
   isSelectable: boolean;
   onSelect?: () => void;
@@ -37,4 +44,11 @@ export interface Scalable {
   onScaleStart?: () => void;
   onScale?: (factor: number) => void;
   onScaleEnd?: () => void;
+}
+
+export interface Rotatable {
+  isRotatable: boolean;
+  onRotateStart?: () => void;
+  onRotate?: (angle: number, axis: Vector3) => void;
+  onRotateEnd?: () => void;
 }

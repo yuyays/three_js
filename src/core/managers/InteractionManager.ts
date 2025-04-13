@@ -4,6 +4,7 @@ import { DragController } from '../../components/controls/DragController';
 import { ScaleController } from '../../components/controls/ScaleController';
 import { createSelectionRaycaster, normalizeCoordinates } from '../../utils/raycasting';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { RotateController } from '/@/components/controls/RotationController';
 
 export class InteractionManager {
   private scene: Scene;
@@ -13,18 +14,17 @@ export class InteractionManager {
   private selectionController: SelectionController;
   private dragController: DragController;
   private scaleController: ScaleController;
+  private rotateController: RotateController; // Add RotateController instance
   private raycaster: Raycaster;
-  
+
   private lastTapTime = 0;
   private readonly doubleTapDelay = 300; // ms
-  
-  // Tracking for different interaction states
+
   private activeTouches: Map<number, Vector2> = new Map();
-  private isPinching = false;
-  private isMultiTouch = false;
+  private isPinching = false; // Represents single touch down
+  private isMultiTouch = false; // Represents two or more touches down
   private lastPointerPosition = new Vector2();
-  
-  // Touch tracking for multi-touch gestures
+
   private primaryTouchId: number | null = null;
   private secondaryTouchId: number | null = null;
 
@@ -32,21 +32,19 @@ export class InteractionManager {
     this.scene = scene;
     this.camera = camera;
     this.domElement = domElement;
-    this.controls = controls;
-    
-    // Create shared raycaster
+    this.controls = controls; // Store OrbitControls instance
+
     this.raycaster = createSelectionRaycaster();
-    
+
     this.selectionController = new SelectionController(camera, scene);
     this.dragController = new DragController(camera, scene, this.raycaster);
     this.scaleController = new ScaleController(camera, scene);
-    
-    // Bind event handlers
+    this.rotateController = new RotateController(camera, scene); // Instantiate RotateController
+
     this.handlePointerDown = this.handlePointerDown.bind(this);
     this.handlePointerMove = this.handlePointerMove.bind(this);
     this.handlePointerUp = this.handlePointerUp.bind(this);
-    
-    // Add event listeners
+
     this.setupEventListeners();
   }
 
@@ -55,201 +53,190 @@ export class InteractionManager {
     this.domElement.addEventListener('pointermove', this.handlePointerMove);
     this.domElement.addEventListener('pointerup', this.handlePointerUp);
     this.domElement.addEventListener('pointercancel', this.handlePointerUp);
-    this.domElement.addEventListener('pointerleave', this.handlePointerUp);
+    this.domElement.addEventListener('pointerleave', this.handlePointerUp); // End interaction if pointer leaves
   }
 
-  private getNormalizedPointerPosition(event: PointerEvent): Vector2 {
-    const { clientX, clientY } = event;
+  private getNormalizedPointerPosition(clientX: number, clientY: number): Vector2 {
     const { width, height } = this.domElement.getBoundingClientRect();
     return normalizeCoordinates(clientX, clientY, width, height);
   }
 
   private handlePointerDown(event: PointerEvent): void {
-    // Prevent default browser behavior
     event.preventDefault();
-    
-    // Store the touch position
+    event.stopPropagation();
+    this.domElement.style.touchAction = 'none'; // Prevent scrolling/zooming during interaction
+
     const position = new Vector2(event.clientX, event.clientY);
     this.activeTouches.set(event.pointerId, position);
-    
-    // Update multi-touch state
+
+    const wasMultiTouch = this.isMultiTouch;
     this.isMultiTouch = this.activeTouches.size > 1;
-    
-    // If this is the first touch, store as primary
-    if (this.primaryTouchId === null) {
-      this.primaryTouchId = event.pointerId;
-      this.lastPointerPosition.copy(position);
-      this.isPinching = true;
-      
-      // Get normalized coordinates for selection/dragging
-      const normalizedPosition = this.getNormalizedPointerPosition(event);
-      const { width, height } = this.domElement.getBoundingClientRect();
-      
-      // Perform selection for single touch
-      this.selectionController.handleTap(event.clientX, event.clientY, width, height);
-      
-      // Get the selected object for potential dragging
-      const selectedObject = this.selectionController.getSelectedObject();
-      
-      // Start dragging if object is draggable
-      if (selectedObject && selectedObject.userData.isDraggable && !this.isMultiTouch) {
-        this.dragController.startDrag(selectedObject, normalizedPosition);
-        // Disable orbit controls during drag
-        this.controls.enabled = false;
-      }
-      
-      const now = Date.now();
-      this.lastTapTime = now;
-    } 
-    // If this is the second touch, store as secondary
-    else if (this.secondaryTouchId === null) {
-      this.secondaryTouchId = event.pointerId;
-      
-      // End any active drag operation when second touch starts
-      if (this.dragController.getIsDragging()) {
-        this.dragController.endDrag();
-      }
-      
-      // Check if we have a selected object that can be scaled
-      const selectedObject = this.selectionController.getSelectedObject();
-      if (selectedObject && selectedObject.userData.isScalable) {
-        // Get positions for both touches
-        const touch1 = this.activeTouches.get(this.primaryTouchId!) || new Vector2();
-        const touch2 = this.activeTouches.get(this.secondaryTouchId) || new Vector2();
-        
-        // Normalize positions for scaling
-        const { width, height } = this.domElement.getBoundingClientRect();
-        const normalizedTouch1 = normalizeCoordinates(touch1.x, touch1.y, width, height);
-        const normalizedTouch2 = normalizeCoordinates(touch2.x, touch2.y, width, height);
-        
-        // Start scaling the selected object
-        this.scaleController.startScale(selectedObject, normalizedTouch1, normalizedTouch2);
-        // Disable orbit controls during scaling
-        this.controls.enabled = false;
-      }
+
+    const selectedObject = this.selectionController.getSelectedObject();
+
+    if (this.activeTouches.size === 1) {
+        // First touch down
+        this.primaryTouchId = event.pointerId;
+        this.lastPointerPosition.copy(position);
+        this.isPinching = true;
+
+        const normalizedPosition = this.getNormalizedPointerPosition(event.clientX, event.clientY);
+
+        // Perform selection only if not already dragging/scaling/rotating
+        if (!this.isDragging() && !this.isScaling() && !this.isRotating()) {
+             const { width, height } = this.domElement.getBoundingClientRect();
+             this.selectionController.handleTap(event.clientX, event.clientY, width, height);
+        }
+
+        const newlySelectedObject = this.selectionController.getSelectedObject();
+        // Start dragging only if the object is draggable and we aren't starting a multi-touch gesture
+        if (newlySelectedObject && newlySelectedObject.userData.isDraggable) {
+            this.dragController.startDrag(newlySelectedObject, normalizedPosition);
+            this.controls.enabled = false; // Disable OrbitControls
+        }
+
+        const now = Date.now();
+        this.lastTapTime = now;
+
+    } else if (this.activeTouches.size === 2 && !wasMultiTouch) {
+        // Second touch down - start multi-touch interactions (scale/rotate)
+        this.secondaryTouchId = event.pointerId;
+
+        // End single-touch drag if it was active
+        if (this.dragController.getIsDragging()) {
+            this.dragController.endDrag();
+        }
+
+        const currentSelectedObject = this.selectionController.getSelectedObject();
+        if (currentSelectedObject) {
+            const touch1 = this.activeTouches.get(this.primaryTouchId!)!;
+            const touch2 = this.activeTouches.get(this.secondaryTouchId!)!;
+
+            // Start scaling if object is scalable
+            if (currentSelectedObject.userData.isScalable) {
+                this.scaleController.startScale(currentSelectedObject, touch1, touch2);
+                this.controls.enabled = false; // Disable OrbitControls
+            }
+             // Start rotating if object is rotatable
+            if (currentSelectedObject.userData.isRotatable) {
+                this.rotateController.startRotate(currentSelectedObject, touch1, touch2);
+                this.controls.enabled = false; // Disable OrbitControls
+            }
+        }
     }
   }
 
   private handlePointerMove(event: PointerEvent): void {
     event.preventDefault();
-    
-    // Update the touch position
-    if (this.activeTouches.has(event.pointerId)) {
-      this.activeTouches.set(event.pointerId, new Vector2(event.clientX, event.clientY));
-    } else {
-      // If we don't have this pointer id, ignore the event
-      return;
-    }
-    
-    // Handle two-handed pinch to scale
+    event.stopPropagation();
+
+    if (!this.activeTouches.has(event.pointerId)) return; // Ignore moves from pointers not tracked
+
+    // Update position
+    const currentPosition = new Vector2(event.clientX, event.clientY);
+    this.activeTouches.set(event.pointerId, currentPosition);
+
     if (this.isMultiTouch && this.primaryTouchId !== null && this.secondaryTouchId !== null) {
-      // Get current positions for both touches
-      const touch1 = this.activeTouches.get(this.primaryTouchId) || new Vector2();
-      const touch2 = this.activeTouches.get(this.secondaryTouchId) || new Vector2();
-      
-      // Normalize positions for scaling
-      const { width, height } = this.domElement.getBoundingClientRect();
-      const normalizedTouch1 = normalizeCoordinates(touch1.x, touch1.y, width, height);
-      const normalizedTouch2 = normalizeCoordinates(touch2.x, touch2.y, width, height);
-      
-      // Update scaling if active
-      if (this.scaleController.getIsScaling()) {
-        this.scaleController.updateScale(normalizedTouch1, normalizedTouch2);
-      }
-    }
-    // Handle single-handed drag
-    else if (event.pointerId === this.primaryTouchId && this.isPinching) {
-      const currentPosition = new Vector2(event.clientX, event.clientY);
-      
-      // Calculate movement delta
-      const delta = new Vector2().subVectors(currentPosition, this.lastPointerPosition);
-      
-      // If we have significant movement, handle as a drag
-      if (delta.length() > 2 && this.dragController.getIsDragging()) {
-        const normalizedPosition = this.getNormalizedPointerPosition(event);
-        this.dragController.updateDrag(normalizedPosition);
-      }
-      
-      this.lastPointerPosition.copy(currentPosition);
+        // --- Two-touch move (Scale and Rotate) ---
+        const touch1 = this.activeTouches.get(this.primaryTouchId)!;
+        const touch2 = this.activeTouches.get(this.secondaryTouchId)!;
+
+        if (this.scaleController.getIsScaling()) {
+            this.scaleController.updateScale(touch1, touch2);
+        }
+        if (this.rotateController.getIsRotating()) {
+            this.rotateController.updateRotate(touch1, touch2);
+        }
+
+    } else if (event.pointerId === this.primaryTouchId && this.isPinching && !this.isMultiTouch) {
+        // --- Single-touch move (Drag) ---
+        const delta = new Vector2().subVectors(currentPosition, this.lastPointerPosition);
+
+        // Use a small threshold to differentiate tap from drag
+        if (delta.length() > 2 && this.dragController.getIsDragging()) {
+             const normalizedPosition = this.getNormalizedPointerPosition(event.clientX, event.clientY);
+             this.dragController.updateDrag(normalizedPosition);
+        }
+        this.lastPointerPosition.copy(currentPosition);
     }
   }
 
   private handlePointerUp(event: PointerEvent): void {
     event.preventDefault();
-    
-    // Remove this touch from active touches
-    this.activeTouches.delete(event.pointerId);
-    
-    // Reset interaction states based on which pointer was released
+    event.stopPropagation();
+
+    if (!this.activeTouches.has(event.pointerId)) return; // Ignore events for pointers we aren't tracking
+
+    // --- End corresponding interactions ---
     if (event.pointerId === this.primaryTouchId) {
-      this.isPinching = false;
-      this.primaryTouchId = null;
-      
-      // End any active drag operation
-      if (this.dragController.getIsDragging()) {
-        this.dragController.endDrag();
-      }
-    } else if (event.pointerId === this.secondaryTouchId) {
-      this.secondaryTouchId = null;
-      
-      // End any active scaling operation
-      if (this.scaleController.getIsScaling()) {
-        this.scaleController.endScale();
-      }
+        this.isPinching = false; // End single pinch state
+        if (this.dragController.getIsDragging()) {
+            this.dragController.endDrag();
+        }
+        // If secondary touch is still down, it becomes the new primary (or handle appropriately)
+        // For simplicity now, we just clear primary
+        this.primaryTouchId = null;
     }
-    
-    // Update multi-touch state
+
+    if (event.pointerId === this.secondaryTouchId) {
+        // End multi-touch interactions
+        if (this.scaleController.getIsScaling()) {
+            this.scaleController.endScale();
+        }
+        if (this.rotateController.getIsRotating()) {
+            this.rotateController.endRotate();
+        }
+        this.secondaryTouchId = null;
+    }
+
+    // Remove the pointer
+    this.activeTouches.delete(event.pointerId);
     this.isMultiTouch = this.activeTouches.size > 1;
-    
-    // Re-enable orbit controls when all interactions end
+
+    // If primary touch was lifted but secondary remains, make secondary the new primary
+    if(this.primaryTouchId === null && this.secondaryTouchId !== null && this.activeTouches.size === 1) {
+        this.primaryTouchId = this.secondaryTouchId;
+        this.secondaryTouchId = null;
+        this.isPinching = true; // Re-enable single pinch state
+        this.lastPointerPosition.copy(this.activeTouches.get(this.primaryTouchId)!);
+        // Potentially start dragging again if needed, or reset state
+    }
+
+
+    // --- Re-enable OrbitControls ONLY if ALL interactions are finished ---
     if (this.activeTouches.size === 0) {
-      this.controls.enabled = true;
+        this.isPinching = false;
+        this.isMultiTouch = false;
+        this.primaryTouchId = null;
+        this.secondaryTouchId = null;
+        this.controls.enabled = true; // Re-enable OrbitControls
+        this.domElement.style.touchAction = 'auto'; // Restore default touch actions
     }
   }
 
-  /**
-   * Register a callback for selection events
-   */
-  public onSelect(callback: (event: any) => void): void {
-    this.selectionController.onSelect(callback);
-  }
+  // ... (keep onSelect, onDrag, onScale methods) ...
+  public onSelect(callback: (event: any) => void): void { /* ... */ }
+  public onDrag(callback: (event: any) => void): void { /* ... */ }
+  public onScale(callback: (event: any) => void): void { /* ... */ }
 
   /**
-   * Register a callback for drag events
+   * Register a callback for rotate events
    */
-  public onDrag(callback: (event: any) => void): void {
-    this.dragController.onDrag(callback);
+  public onRotate(callback: (event: any) => void): void {
+    this.rotateController.onRotate(callback);
   }
 
-  /**
-   * Register a callback for scale events
-   */
-  public onScale(callback: (event: any) => void): void {
-    this.scaleController.onScale(callback);
-  }
+  public isDragging(): boolean { return this.dragController.getIsDragging(); }
+  public isScaling(): boolean { return this.scaleController.getIsScaling(); }
+  public isRotating(): boolean { return this.rotateController.getIsRotating(); } // Add isRotating check
 
-  /**
-   * Check if dragging is currently active
-   */
-  public isDragging(): boolean {
-    return this.dragController.getIsDragging();
-  }
-
-  /**
-   * Check if scaling is currently active
-   */
-  public isScaling(): boolean {
-    return this.scaleController.getIsScaling();
-  }
-
-  /**
-   * Clean up event listeners
-   */
   public dispose(): void {
+    // ... remove listeners ...
     this.domElement.removeEventListener('pointerdown', this.handlePointerDown);
     this.domElement.removeEventListener('pointermove', this.handlePointerMove);
     this.domElement.removeEventListener('pointerup', this.handlePointerUp);
     this.domElement.removeEventListener('pointercancel', this.handlePointerUp);
     this.domElement.removeEventListener('pointerleave', this.handlePointerUp);
+    this.domElement.style.touchAction = 'auto'; // Ensure touch actions are reset on dispose
   }
 }
