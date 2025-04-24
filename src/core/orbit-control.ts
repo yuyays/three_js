@@ -3,4 +3,4 @@ import { camera } from './camera'
 import { renderer } from './renderer'
 
 export const controls = new OrbitControls(camera, renderer.domElement)
-controls.enableDamping = true
+controls.enableDamping = false
