@@ -1,8 +1,10 @@
+import * as THREE from 'three';
 import { 
   PerspectiveCamera, Scene, BoxGeometry, SphereGeometry, CylinderGeometry,
   ConeGeometry, TorusGeometry, TetrahedronGeometry, Mesh, MeshStandardMaterial, 
   WebGLRenderer, AmbientLight, DirectionalLight, Vector3, Color, Texture,
-  TextureLoader as ThreeTextureLoader, RepeatWrapping
+  TextureLoader as ThreeTextureLoader, RepeatWrapping, HemisphereLight, PointLight,
+  MeshBasicMaterial, PlaneGeometry, GridHelper
 } from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { InteractionManager } from './core/managers/InteractionManager';
@@ -110,13 +112,263 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(window.devicePixelRatio);
 document.body.appendChild(renderer.domElement);
 
-// Add lights
-const ambientLight = new AmbientLight(0xffffff, 0.5);
-scene.add(ambientLight);
+// Lighting System
+const lighting = {
+  // Lights
+  ambientLight: new AmbientLight(0xffffff, 0.5),
+  directionalLight: new DirectionalLight(0xffffff, 1.5), // Increased intensity
+  hemisphereLight: new HemisphereLight(0xffffbb, 0x080820, 0.7), // Increased intensity
+  pointLights: [] as PointLight[],
+  
+  // Ambient Occlusion
+  useAO: true,
+  aoIntensity: 0.3,
+  
+  // Day/night cycle
+  isDay: true,
+  dayIntensity: 1.0,
+  nightIntensity: 0.2,
+  transitionSpeed: 0.002,
+  currentIntensity: 1.0,
+  targetIntensity: 1.0,
+  
+  // Initialize lighting
+  init: function() {
+    // Configure directional light with better shadow settings
+    this.directionalLight.position.set(5, 15, 10);
+    this.directionalLight.castShadow = true;
+    this.directionalLight.shadow.mapSize.width = 4096; // Higher resolution shadow map
+    this.directionalLight.shadow.mapSize.height = 4096;
+    this.directionalLight.shadow.camera.near = 0.1;
+    this.directionalLight.shadow.camera.far = 100;
+    this.directionalLight.shadow.camera.left = -30;
+    this.directionalLight.shadow.camera.right = 30;
+    this.directionalLight.shadow.camera.top = 30;
+    this.directionalLight.shadow.camera.bottom = -30;
+    this.directionalLight.shadow.bias = -0.001;
+    this.directionalLight.shadow.normalBias = 0.02; // Reduced normal bias for better quality
+    
+    // Hemisphere light for more natural outdoor lighting
+    this.hemisphereLight.position.set(0, 20, 0);
+    
+    // Add all lights to scene
+    scene.add(this.ambientLight);
+    scene.add(this.directionalLight);
+    scene.add(this.hemisphereLight);
+    
+    // Add a couple of point lights
+    this.addPointLight(new Vector3(0, 5, 0), 0xffaa00, 1, 20);
+    this.addPointLight(new Vector3(10, 3, 10), 0x00aaff, 0.5, 15);
+    
+    // Enable shadows on the renderer
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  },
+  
+  // Toggle between day and night
+  toggleDayNight: function() {
+    this.isDay = !this.isDay;
+    this.targetIntensity = this.isDay ? this.dayIntensity : this.nightIntensity;
+    
+    // Update light colors for day/night
+    if (this.isDay) {
+      this.directionalLight.color.set(0xffffff);
+      // Set sky and ground colors for day
+      this.hemisphereLight.color.set(0xffffbb);
+      this.hemisphereLight.groundColor.set(0x080820);
+    } else {
+      this.directionalLight.color.set(0x4444aa);
+      // Set sky and ground colors for night
+      this.hemisphereLight.color.set(0x222244);
+      this.hemisphereLight.groundColor.set(0x000022);
+    }
+    
+    // Update the light's internal state
+    this.hemisphereLight.dispose();
+    this.hemisphereLight = new HemisphereLight(
+      this.hemisphereLight.color.getHex(),
+      this.hemisphereLight.groundColor.getHex(),
+      0.7
+    );
+    
+    // Update position and re-add to scene
+    this.hemisphereLight.position.set(0, 20, 0);
+    scene.add(this.hemisphereLight);
+  },
+  
+  // Add a point light to the scene
+  addPointLight: function(position: Vector3, color: number, intensity: number, distance: number) {
+    const light = new PointLight(color, intensity, distance);
+    light.position.copy(position);
+    light.castShadow = true;
+    light.shadow.mapSize.width = 1024;
+    light.shadow.mapSize.height = 1024;
+    light.shadow.camera.near = 0.5;
+    light.shadow.camera.far = 50;
+    
+    this.pointLights.push(light);
+    scene.add(light);
+    
+    // Add a small helper sphere to visualize the light
+    const sphereSize = 0.2;
+    const pointLightHelper = new Mesh(
+      new SphereGeometry(sphereSize, 16, 8),
+      new MeshBasicMaterial({ color: color })
+    );
+    pointLightHelper.position.copy(position);
+    scene.add(pointLightHelper);
+    
+    return light;
+  },
+  
+  // Update lighting (call in animation loop)
+  update: function() {
+    // Smooth transition between day and night
+    if (Math.abs(this.currentIntensity - this.targetIntensity) > 0.001) {
+      this.currentIntensity += (this.targetIntensity - this.currentIntensity) * this.transitionSpeed;
+      
+      // Update light intensities with ambient occlusion factor
+      const aoFactor = this.useAO ? (1.0 - this.aoIntensity) + this.currentIntensity * this.aoIntensity : 1.0;
+      
+      this.ambientLight.intensity = this.currentIntensity * 0.5 * aoFactor;
+      this.directionalLight.intensity = this.currentIntensity;
+      this.hemisphereLight.intensity = this.currentIntensity * 0.7 * aoFactor;
+      
+      // Update shadow intensity based on time of day
+      this.directionalLight.shadow.bias = -0.001 * (1.0 - this.currentIntensity * 0.5);
+    }
+    
+    // Animate point lights (subtle flicker and movement)
+    const time = Date.now() * 0.001;
+    this.pointLights.forEach((light, i) => {
+      // Add subtle movement to point lights
+      if (i % 2 === 0) {
+        const offset = i * 10;
+        light.position.x += Math.sin(time * 0.5 + offset) * 0.01;
+        light.position.z += Math.cos(time * 0.3 + offset) * 0.01;
+        
+        // Subtle flicker effect
+        light.intensity = 0.8 + Math.sin(time * 3 + offset) * 0.1;
+      }
+    });
+  }
+};
 
-const directionalLight = new DirectionalLight(0xffffff, 1);
-directionalLight.position.set(5, 5, 5);
-scene.add(directionalLight);
+// Initialize lighting
+lighting.init();
+
+// Create a skybox
+function createSkybox() {
+  const skyGeometry = new THREE.SphereGeometry(500, 60, 40);
+  const skyMaterial = new THREE.MeshBasicMaterial({
+    map: createGradientTexture(),
+    side: THREE.BackSide,
+    fog: false
+  });
+  
+  const skybox = new THREE.Mesh(skyGeometry, skyMaterial);
+  scene.add(skybox);
+  return skybox;
+}
+
+// Create gradient texture for skybox
+function createGradientTexture() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 1024;
+  canvas.height = 512;
+  const context = canvas.getContext('2d');
+  
+  if (!context) return new THREE.Texture();
+  
+  const gradient = context.createLinearGradient(0, 0, 0, canvas.height);
+  gradient.addColorStop(0, '#87CEEB');  // Sky blue
+  gradient.addColorStop(0.5, '#1E90FF'); // Dodger blue
+  gradient.addColorStop(1, '#000033');  // Dark blue
+  
+  context.fillStyle = gradient;
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  
+  const texture = new THREE.CanvasTexture(canvas);
+  return texture;
+}
+
+// Create environment map for reflections
+function createEnvironmentMap() {
+  const loader = new THREE.CubeTextureLoader();
+  const texture = loader.load([
+    'textures/cube/SwedishRoyalCastle/px.jpg',
+    'textures/cube/SwedishRoyalCastle/nx.jpg',
+    'textures/cube/SwedishRoyalCastle/py.jpg',
+    'textures/cube/SwedishRoyalCastle/ny.jpg',
+    'textures/cube/SwedishRoyalCastle/pz.jpg',
+    'textures/cube/SwedishRoyalCastle/nz.jpg'
+  ]);
+  
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+// Initialize environment
+const skybox = createSkybox();
+// const envMap = createEnvironmentMap(); // Uncomment if you have environment map textures
+
+// Add ground plane
+const groundGeometry = new THREE.PlaneGeometry(50, 50);
+const groundMaterial = new THREE.MeshStandardMaterial({ 
+  color: 0x333333,
+  roughness: 0.8,
+  metalness: 0.2
+});
+const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+ground.rotation.x = -Math.PI / 2;
+ground.position.y = -2;
+ground.receiveShadow = true;
+scene.add(ground);
+
+// Add grid helper
+const gridHelper = new THREE.GridHelper(50, 50, 0x555555, 0x333333);
+gridHelper.position.y = -1.99; // Slightly above the ground to prevent z-fighting
+scene.add(gridHelper);
+
+// Add lighting controls to UI
+function addLightingControls() {
+  const uiControls = document.getElementById('ui-controls');
+  if (!uiControls) return;
+  
+  // Container for lighting controls
+  const lightingContainer = document.createElement('div');
+  lightingContainer.style.marginTop = '15px';
+  lightingContainer.style.padding = '10px';
+  lightingContainer.style.borderTop = '1px solid #444';
+  
+  // Day/Night toggle
+  const toggleBtn = document.createElement('button');
+  toggleBtn.className = 'shape-btn';
+  toggleBtn.textContent = 'Toggle Day/Night';
+  toggleBtn.style.marginRight = '10px';
+  toggleBtn.onclick = () => lighting.toggleDayNight();
+  
+  // Ambient Occlusion toggle
+  const aoToggle = document.createElement('button');
+  aoToggle.className = 'shape-btn';
+  aoToggle.textContent = 'Toggle AO';
+  aoToggle.title = 'Toggle Ambient Occlusion';
+  aoToggle.onclick = () => {
+    lighting.useAO = !lighting.useAO;
+    aoToggle.style.backgroundColor = lighting.useAO ? '#4CAF50' : '#f44336';
+  };
+  aoToggle.style.backgroundColor = lighting.useAO ? '#4CAF50' : '#f44336';
+  
+  // Add controls to container
+  lightingContainer.appendChild(toggleBtn);
+  lightingContainer.appendChild(aoToggle);
+  uiControls.appendChild(lightingContainer);
+  
+  uiControls.appendChild(toggleBtn);
+}
+
+// Call this when initializing the UI
+addLightingControls();
 
 // Set up orbit controls
 const controls = new OrbitControls(camera, renderer.domElement);
@@ -144,6 +396,9 @@ function loadTexture(url: string, repeat: number = 1): Texture | null {
     return null;
   }
 }
+
+// Store all shapes for animation
+const shapes: Mesh[] = [];
 
 // Create procedural textures for testing (since we don't have actual files)
 function createProceduralTexture(type: string): Texture | null {
@@ -211,14 +466,89 @@ function createProceduralTexture(type: string): Texture | null {
         ctx.stroke();
       }
       break;
-    
+
+    case 'brick':
+      // Brick pattern
+      const brickWidth = 100;
+      const brickHeight = 40;
+      const brickPadding = 4;
+      
+      // Base color
+      ctx.fillStyle = '#B22222';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      
+      // Draw bricks
+      for (let y = 0; y < canvas.height; y += brickHeight + brickPadding) {
+        const offset = (y / (brickHeight + brickPadding)) % 2 ? 0 : -brickWidth / 2;
+        
+        for (let x = offset; x < canvas.width; x += brickWidth + brickPadding) {
+          // Brick color with some variation
+          const hue = 0 + (Math.random() * 10 - 5);
+          ctx.fillStyle = `hsl(${hue}, 60%, 40%)`;
+          
+          // Draw brick with highlight
+          ctx.fillRect(x, y, brickWidth, brickHeight);
+          
+          // Add some texture
+          ctx.strokeStyle = 'rgba(0,0,0,0.1)';
+          ctx.lineWidth = 2;
+          ctx.strokeRect(x, y, brickWidth, brickHeight);
+        }
+      }
+      break;
+
+    case 'carpet':
+      // Soft carpet-like texture
+      ctx.fillStyle = '#4A6B8A';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      
+      // Add noise
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const data = imageData.data;
+      
+      for (let i = 0; i < data.length; i += 4) {
+        // Add some noise
+        const noise = Math.random() * 20;
+        data[i] += noise;     // R
+        data[i + 1] += noise; // G
+        data[i + 2] += noise; // B
+      }
+      
+      ctx.putImageData(imageData, 0, 0);
+      break;
+
+    case 'tiles':
+      // Ceramic tile pattern
+      const tileSize = 60;
+      const groutWidth = 4;
+      
+      // Grout
+      ctx.fillStyle = '#888888';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      
+      // Tiles
+      for (let y = 0; y < canvas.height; y += tileSize + groutWidth) {
+        for (let x = 0; x < canvas.width; x += tileSize + groutWidth) {
+          // Random tile color with slight variation
+          const hue = 200 + Math.random() * 20;
+          ctx.fillStyle = `hsl(${hue}, 30%, 80%)`;
+          ctx.fillRect(x, y, tileSize, tileSize);
+          
+          // Add some texture to tiles
+          ctx.strokeStyle = 'rgba(255,255,255,0.1)';
+          ctx.lineWidth = 1;
+          ctx.strokeRect(x + 2, y + 2, tileSize - 4, tileSize - 4);
+        }
+      }
+      break;
+      
     case 'checkerboard':
       // Create a checkerboard pattern
-      const tileSize = canvas.width / 8;
+      const checkerSize = canvas.width / 8;
       for (let y = 0; y < 8; y++) {
         for (let x = 0; x < 8; x++) {
           ctx.fillStyle = (x + y) % 2 === 0 ? '#ffffff' : '#444444';
-          ctx.fillRect(x * tileSize, y * tileSize, tileSize, tileSize);
+          ctx.fillRect(x * checkerSize, y * checkerSize, checkerSize, checkerSize);
         }
       }
       break;
@@ -318,6 +648,20 @@ const createInteractiveShape = (
   shape.position.copy(position);
   shape.name = `${shapeType}_${shapeCount++}`;
   
+  // Enable shadows for all objects
+  shape.castShadow = true;
+  shape.receiveShadow = true;
+  
+  // Add random rotation speed for smooth animation
+  (shape as any).rotationSpeed = {
+    x: (Math.random() - 0.5) * 0.005,
+    y: (Math.random() - 0.5) * 0.005,
+    z: (Math.random() - 0.5) * 0.005
+  };
+  
+  // Add to shapes array for animation
+  shapes.push(shape);
+  
   // Make the shape interactive with all our capabilities
   makeSelectable(shape, {
     highlightColor: 0xffffff,
@@ -359,12 +703,13 @@ const createInteractiveShape = (
   return shape;
 };
 
-// Create initial diverse shapes with textures
+// Create initial diverse shapes with different textures
 createInteractiveShape('box', new Vector3(-4, 0, 0), 0xff0000, 'wood');
 createInteractiveShape('sphere', new Vector3(-2, 0, 0), 0x00ff00, 'metal');
 createInteractiveShape('cylinder', new Vector3(0, 0, 0), 0x0000ff, 'marble');
-createInteractiveShape('cone', new Vector3(2, 0, 0), 0xff00ff);
-createInteractiveShape('torus', new Vector3(4, 0, 0), 0xffff00, 'checkerboard');
+createInteractiveShape('cone', new Vector3(2, 0, 0), 0xffff00, 'brick');
+createInteractiveShape('torus', new Vector3(4, 0, 0), 0xff00ff, 'carpet');
+createInteractiveShape('tetrahedron', new Vector3(6, 0, 0), 0x00ffff, 'tiles');
 
 // Create Interaction Manager
 const interactionManager = new InteractionManager(scene, camera, renderer.domElement, controls);
@@ -466,10 +811,29 @@ window.addEventListener('resize', () => {
 // Animation loop
 function animate() {
   requestAnimationFrame(animate);
+  
+  // Update lighting
+  lighting.update();
+  
+  // Rotate all shapes
+  shapes.forEach(shape => {
+    if ((shape as any).rotationSpeed) {
+      shape.rotation.x += (shape as any).rotationSpeed.x;
+      shape.rotation.y += (shape as any).rotationSpeed.y;
+      shape.rotation.z += (shape as any).rotationSpeed.z;
+    }
+    
+    // Update shadow matrix for moving objects
+    if (shape.castShadow) {
+      shape.updateMatrixWorld();
+    }
+  });
+  
   // Only update controls if they are enabled
   if (controls.enabled) {
     controls.update();
   }
+  
   renderer.render(scene, camera);
 }
 
